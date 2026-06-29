@@ -49,7 +49,7 @@ jobs:
       # concrete mechanism behind "never deploy :latest, never deploy
       # unscanned images" from the design doc's security section.
       - name: scan image with Trivy
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "the-redemption:${{ steps.meta.outputs.sha_short }}"
           severity: "CRITICAL,HIGH"
