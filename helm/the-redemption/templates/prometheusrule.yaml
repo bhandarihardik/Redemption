@@ -1,0 +1,84 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: the-redemption-slo-alerts
+  namespace: {{ .Values.namespace }}
+  labels:
+    release: kube-prometheus-stack
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: the-redemption-slo
+      rules:
+        - record: redemption:requests:availability_burn_rate_5m
+          expr: |
+            sum(rate(istio_requests_total{destination_workload="the-redemption",response_code=~"5.."}[5m]))
+            /
+            sum(rate(istio_requests_total{destination_workload="the-redemption"}[5m]))
+
+        - record: redemption:requests:availability_burn_rate_1h
+          expr: |
+            sum(rate(istio_requests_total{destination_workload="the-redemption",response_code=~"5.."}[1h]))
+            /
+            sum(rate(istio_requests_total{destination_workload="the-redemption"}[1h]))
+
+        - alert: RedemptionErrorBudgetFastBurn
+          expr: |
+            redemption:requests:availability_burn_rate_5m > ({{ .Values.slo.fastBurnMultiplier }} * {{ .Values.slo.errorBudgetTarget }})
+            and
+            redemption:requests:availability_burn_rate_1h > ({{ .Values.slo.fastBurnMultiplier }} * {{ .Values.slo.errorBudgetTarget }})
+          for: 2m
+          labels:
+            severity: page
+          annotations:
+            summary: "The Redemption is fast-burning its error budget"
+            runbook: "{{ .Values.slo.runbookBaseUrl }}/redemption-fast-burn"
+
+        - alert: RedemptionErrorBudgetSlowBurn
+          expr: |
+            redemption:requests:availability_burn_rate_1h > ({{ .Values.slo.slowBurnMultiplier }} * {{ .Values.slo.errorBudgetTarget }})
+          for: 6h
+          labels:
+            severity: ticket
+          annotations:
+            summary: "The Redemption is slow-burning its error budget"
+            runbook: "{{ .Values.slo.runbookBaseUrl }}/redemption-slow-burn"
+
+        - alert: RedemptionLatencySLOAtRisk
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(istio_request_duration_milliseconds_bucket{destination_workload="the-redemption"}[5m])) by (le)
+            ) > {{ .Values.slo.latencyP99TargetMs }}
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "The Redemption p99 latency exceeds {{ .Values.slo.latencyP99TargetMs }}ms SLO target"
+
+        - alert: RedemptionPodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ .Values.namespace }}"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "the-redemption pod is crash looping"
+
+        - alert: RedemptionHPAMaxedOut
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="{{ .Values.namespace }}"}
+            >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="{{ .Values.namespace }}"}
+          for: 5m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "The Redemption autoscaler is at its configured ceiling"
+
+        - alert: RedemptionPDBBlockingDrains
+          expr: |
+            kube_poddisruptionbudget_status_disruptions_allowed{namespace="{{ .Values.namespace }}"} == 0
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "PDB has blocked voluntary disruptions for 15m+ — investigate before it blocks a planned upgrade"

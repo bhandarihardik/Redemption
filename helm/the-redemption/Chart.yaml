@@ -1,0 +1,20 @@
+apiVersion: v2
+name: the-redemption
+description: >-
+  Helm chart for The Redemption — Accor's global hotel point-deduction
+  microservice. Packages the full production topology: a fixed on-demand
+  baseline tier and a KEDA/Karpenter-scaled burst tier behind one Service,
+  Istio mTLS + authorization, default-deny NetworkPolicy, and SLO-based
+  alerting.
+type: application
+version: 1.0.0       # chart version — bump on any template/structure change
+appVersion: "1.0.0"  # application version — overridden per-deploy via values.image.tag, see CI workflow
+keywords:
+  - eks
+  - keda
+  - karpenter
+  - istio
+home: https://github.com/accor-thailand/redemption-platform
+maintainers:
+  - name: SRE Team
+    email: sre@accor-internal.com

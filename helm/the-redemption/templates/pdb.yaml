@@ -1,0 +1,17 @@
+# Protects ONLY the baseline tier against voluntary disruption (node drains,
+# cluster upgrades, Karpenter consolidation). The burst tier deliberately
+# has no PDB — it's disposable by design, and a PDB on scale-to-zero
+# capacity would only get in the way of legitimate scale-down.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: the-redemption-pdb
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.baseline.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app: the-redemption
+      workload-tier: baseline

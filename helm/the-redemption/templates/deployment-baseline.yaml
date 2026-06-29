@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# Baseline tier — the guaranteed floor. Fixed replica count from
+# values.baseline.replicas, on-demand nodes only via nodeSelector, never
+# scaled by KEDA. Zero-downtime rolling update (maxUnavailable: 0).
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: the-redemption
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: the-redemption
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.baseline.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: the-redemption
+      workload-tier: baseline
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: the-redemption
+        workload-tier: baseline
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: the-redemption
+              topologyKey: kubernetes.io/hostname
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: the-redemption
+
+      nodeSelector:
+        {{- toYaml .Values.baseline.nodeSelector | nindent 8 }}
+
+      securityContext:
+        {{- include "the-redemption.podSecurityContext" . | nindent 8 }}
+
+      containers:
+        {{- include "the-redemption.container" (dict "root" $ "resources" .Values.baseline.resources) | nindent 8 }}
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,23 @@
+The Redemption has been deployed.
+
+Release:    {{ .Release.Name }}
+Namespace:  {{ .Values.namespace }}
+Image:      {{ .Values.image.repository }}:{{ .Values.image.tag }}
+
+Baseline replicas (fixed floor): {{ .Values.baseline.replicas }}
+Burst tier:                      {{ if .Values.burst.enabled }}enabled, KEDA-scaled 0..{{ .Values.keda.maxReplicas }}{{ else }}disabled{{ end }}
+
+Check rollout status:
+  kubectl -n {{ .Values.namespace }} rollout status deployment/the-redemption
+{{- if .Values.burst.enabled }}
+  kubectl -n {{ .Values.namespace }} rollout status deployment/the-redemption-burst
+{{- end }}
+
+View current scale:
+  kubectl -n {{ .Values.namespace }} get deploy,scaledobject,hpa
+
+{{- if .Values.istio.enabled }}
+
+Service reachable inside the mesh at:
+  https://{{ .Values.istio.gatewayHost }}
+{{- end }}

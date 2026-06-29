@@ -1,0 +1,154 @@
+# ---------------------------------------------------------------------------
+# Default values for the-redemption chart.
+#
+# These defaults ARE the production configuration — there is intentionally
+# no separate "production overlay" file the way the Kustomize version had
+# one. A second values-staging.yaml (not included here, but trivial to add)
+# would override only the fields that genuinely differ for staging: lower
+# replica floors, relaxed PDB, a different image tag. Everything else
+# inherits from this file by default, which is the actual point of Helm
+# over Kustomize patches — one source of truth with diffs expressed as
+# small override files, not parallel near-duplicate manifest trees.
+# ---------------------------------------------------------------------------
+
+image:
+  repository: "<ECR_REPO_URL>/the-redemption"
+  tag: "production-latest"  # overridden per-deploy by CI with the real Git SHA — see .github/workflows/app-ci-cd.yml
+  pullPolicy: IfNotPresent
+
+namespace: redemption
+
+serviceAccount:
+  create: true
+  name: the-redemption
+  # IRSA binding — populated from the eks Terraform module's
+  # irsa_role_arns["app"] output. No node-level IAM role grants this pod
+  # any AWS access; only this ServiceAccount, via this annotation, can.
+  irsaRoleArn: "<TERRAFORM_OUTPUT:irsa_role_arns.app>"
+
+service:
+  port: 80
+  metricsPort: 9090
+
+# ---------------------------------------------------------------------------
+# Baseline tier — the guaranteed floor. Fixed replica count, on-demand
+# nodes only, never touched by KEDA. See terraform/modules/eks for the
+# matching node group this nodeSelector targets.
+# ---------------------------------------------------------------------------
+baseline:
+  replicas: 3   # one per AZ — matches azs count in terraform/environments/production/variables.tf
+  nodeSelector:
+    workload-tier: baseline
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  pdb:
+    minAvailable: 2
+
+# ---------------------------------------------------------------------------
+# Burst tier — KEDA/Karpenter-scaled. Starts at 0, tolerates the Karpenter
+# spot taint, never gets a PDB (disposable by design).
+# ---------------------------------------------------------------------------
+burst:
+  enabled: true
+  nodeSelector:
+    workload-tier: burst
+  toleration:
+    key: workload-tier
+    value: burst
+    effect: NoSchedule
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# KEDA ScaledObject — targets ONLY the burst Deployment, see templates/keda-scaledobject.yaml
+# ---------------------------------------------------------------------------
+keda:
+  minReplicas: 0
+  maxReplicas: 40
+  cooldownPeriod: 120
+  scaleUp:
+    percentValue: 100
+    periodSeconds: 30
+  scaleDown:
+    percentValue: 10
+    periodSeconds: 60
+    stabilizationWindowSeconds: 120
+  triggers:
+    prometheus:
+      serverAddress: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+      threshold: "50"
+    sqs:
+      queueURL: "<SQS_QUEUE_URL_FROM_TERRAFORM_OUTPUT>"
+      queueLength: "100"
+      awsRegion: us-east-1
+
+# ---------------------------------------------------------------------------
+# Probes — shared between baseline and burst via the shared pod-spec template
+# ---------------------------------------------------------------------------
+probes:
+  startup:
+    path: /health/startup
+    failureThreshold: 30
+    periodSeconds: 2
+  readiness:
+    path: /health/ready
+    periodSeconds: 5
+    failureThreshold: 2
+    timeoutSeconds: 2
+  liveness:
+    path: /health/live
+    periodSeconds: 10
+    failureThreshold: 6
+    timeoutSeconds: 3
+
+terminationGracePeriodSeconds: 45
+preStopSleepSeconds: 10
+
+config:
+  logLevel: info
+  logFormat: json
+  otelEndpoint: "http://otel-collector.monitoring.svc:4317"
+  dbHost: "<TERRAFORM_OUTPUT:rds_primary_endpoint>"
+  dbReadReplicaHost: "<TERRAFORM_OUTPUT:rds_replica_endpoint>"
+  redisHost: "<TERRAFORM_OUTPUT:redis_primary_endpoint>"
+
+externalSecret:
+  enabled: true
+  refreshInterval: 1h
+  secretStoreName: aws-secrets-manager
+  remoteKey: "redemption-prod-pg-credentials"
+
+istio:
+  enabled: true
+  gatewayHost: "redemption.accor-internal.com"
+  tlsCredentialName: the-redemption-tls
+  requestTimeout: 4s
+  retries:
+    attempts: 2
+    perTryTimeout: 1500ms
+    retryOn: "5xx,reset,connect-failure"
+  outlierDetection:
+    consecutive5xxErrors: 5
+    interval: 10s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 50
+
+networkPolicy:
+  enabled: true
+
+slo:
+  errorBudgetTarget: 0.0005    # 99.95% availability
+  latencyP99TargetMs: 500
+  fastBurnMultiplier: 14.4
+  slowBurnMultiplier: 3
+  runbookBaseUrl: "https://wiki.accor-internal.com/runbooks"

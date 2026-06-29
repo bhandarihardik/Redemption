@@ -1,0 +1,68 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: the-redemption-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.istio.tlsCredentialName }}
+      hosts:
+        - {{ .Values.istio.gatewayHost | quote }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: the-redemption
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.istio.gatewayHost | quote }}
+  gateways:
+    - the-redemption-gateway
+  http:
+    - timeout: {{ .Values.istio.requestTimeout }}
+      retries:
+        attempts: {{ .Values.istio.retries.attempts }}
+        perTryTimeout: {{ .Values.istio.retries.perTryTimeout }}
+        retryOn: {{ .Values.istio.retries.retryOn | quote }}
+      route:
+        - destination:
+            host: the-redemption.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.service.port }}
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: the-redemption
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  host: the-redemption.{{ .Values.namespace }}.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: {{ .Values.istio.outlierDetection.consecutive5xxErrors }}
+      interval: {{ .Values.istio.outlierDetection.interval }}
+      baseEjectionTime: {{ .Values.istio.outlierDetection.baseEjectionTime }}
+      maxEjectionPercent: {{ .Values.istio.outlierDetection.maxEjectionPercent }}
+{{- end }}

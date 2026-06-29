@@ -1,0 +1,40 @@
+{{- if .Values.istio.enabled }}
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: the-redemption-authz
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: the-redemption
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/istio-ingress/sa/istio-ingressgateway"
+      to:
+        - operation:
+            ports: ["8080"]
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/monitoring/sa/kube-prometheus-stack-prometheus"
+      to:
+        - operation:
+            ports: ["9090"]
+{{- end }}

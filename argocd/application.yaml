@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# ArgoCD Application — the reconciliation loop that closes the Day-2 Ops
+# story. This is applied ONCE, manually, when the cluster is first
+# bootstrapped (see README). After that, ArgoCD watches this repo's
+# helm/the-redemption chart and reconciles the live cluster to match it
+# automatically, on every merge to main.
+# ---------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: the-redemption
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/accor-thailand/redemption-platform.git
+    targetRevision: main
+    path: helm/the-redemption
+    helm:
+      releaseName: the-redemption
+      valueFiles:
+        - values.yaml
+      # Per-environment overrides (e.g. values-staging.yaml with lower
+      # replica floors and a relaxed PDB) would be added here as additional
+      # entries in valueFiles, layered on top of the chart's own defaults.
+      # That's the actual point of moving to Helm: one values.yaml as the
+      # base truth, small override files for what genuinely differs by
+      # environment, instead of parallel near-duplicate manifest trees.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: redemption
+  syncPolicy:
+    automated:
+      prune: true     # removes resources deleted from Git - manifests are the single source of truth, not "whatever's running"
+      selfHeal: true   # reverts manual kubectl edits against drift automatically - this is what makes "no one runs kubectl apply by hand" actually true, not aspirational
+    syncOptions:
+      - CreateNamespace=false # namespace is created via the chart's namespace.yaml template itself, not implicitly
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

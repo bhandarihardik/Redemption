@@ -1,0 +1,77 @@
+{{- if .Values.burst.enabled }}
+# ---------------------------------------------------------------------------
+# Burst tier — a SEPARATE Deployment from the baseline one, deliberately.
+# Two Deployments behind one Service is what keeps the guaranteed floor
+# (baseline) and disposable spot capacity (burst) from ever sharing a
+# scaling unit or a node pool. Starts at 0 replicas; KEDA owns its scale
+# from here on, see templates/keda-scaledobject.yaml.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: the-redemption-burst
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: the-redemption
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  replicas: 0 # KEDA-managed, this value is ignored once the ScaledObject targets it
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: the-redemption
+      workload-tier: burst
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        app: the-redemption
+        workload-tier: burst
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution: # preferred not required — under extreme spike, packing density matters more than perfect spread
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: the-redemption
+                topologyKey: kubernetes.io/hostname
+
+      topologySpreadConstraints:
+        - maxSkew: 2
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway # soft preference — never block burst scheduling during a real spike
+          labelSelector:
+            matchLabels:
+              app: the-redemption
+
+      tolerations:
+        - key: {{ .Values.burst.toleration.key }}
+          value: {{ .Values.burst.toleration.value }}
+          effect: {{ .Values.burst.toleration.effect }}
+
+      nodeSelector:
+        {{- toYaml .Values.burst.nodeSelector | nindent 8 }}
+
+      securityContext:
+        {{- include "the-redemption.podSecurityContext" . | nindent 8 }}
+
+      containers:
+        {{- include "the-redemption.container" (dict "root" $ "resources" .Values.burst.resources) | nindent 8 }}
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

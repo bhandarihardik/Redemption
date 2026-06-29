@@ -1,0 +1,55 @@
+{{- if .Values.burst.enabled }}
+# ---------------------------------------------------------------------------
+# KEDA ScaledObject — targets ONLY the-redemption-burst. The baseline
+# Deployment's replica count lives in values.baseline.replicas and is never
+# touched by KEDA. See design doc section 3 for the full HPA-vs-KEDA
+# rationale and the scale-up/scale-down asymmetry rationale.
+# ---------------------------------------------------------------------------
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: the-redemption-scaler
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "the-redemption.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: the-redemption-burst
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          policies:
+            - type: Percent
+              value: {{ .Values.keda.scaleUp.percentValue }}
+              periodSeconds: {{ .Values.keda.scaleUp.periodSeconds }}
+          stabilizationWindowSeconds: 0
+        scaleDown:
+          policies:
+            - type: Percent
+              value: {{ .Values.keda.scaleDown.percentValue }}
+              periodSeconds: {{ .Values.keda.scaleDown.periodSeconds }}
+          stabilizationWindowSeconds: {{ .Values.keda.scaleDown.stabilizationWindowSeconds }}
+
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.keda.triggers.prometheus.serverAddress }}
+        metricName: istio_requests_per_pod
+        query: |
+          sum(rate(istio_requests_total{destination_workload="the-redemption",reporter="destination"}[30s]))
+          /
+          count(up{job="the-redemption"})
+        threshold: {{ .Values.keda.triggers.prometheus.threshold | quote }}
+
+    - type: aws-sqs-queue
+      metadata:
+        queueURL: {{ .Values.keda.triggers.sqs.queueURL | quote }}
+        queueLength: {{ .Values.keda.triggers.sqs.queueLength | quote }}
+        awsRegion: {{ .Values.keda.triggers.sqs.awsRegion }}
+        identityOwner: operator
+{{- end }}
