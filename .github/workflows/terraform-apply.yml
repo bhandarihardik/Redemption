@@ -1,0 +1,53 @@
+name: terraform-apply
+
+# Deliberately separate from terraform-ci.yml. Plan runs automatically on
+# every PR, apply only runs after merge to main AND requires a human
+# approval via the 'production' GitHub Environment's protection rule. This
+# is the actual control that prevents "someone's Friday-afternoon merge
+# silently changes prod infra" — the approval gate is enforced by GitHub,
+# not by social convention.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: "1.9.5"
+  AWS_REGION: "us-east-1"
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production # GitHub Environment with required reviewers configured - this line IS the approval gate
+    defaults:
+      run:
+        working-directory: terraform/environments/production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/github-actions-terraform-apply
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform apply
+        run: terraform apply -auto-approve -input=false
+
+      - name: notify on completion
+        if: always()
+        run: |
+          echo "Apply finished with status: ${{ job.status }}"
+          # Wired to Slack webhook in real rollout - see design doc Day-2 Ops section

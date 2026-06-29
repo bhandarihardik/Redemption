@@ -1,1 +1,100 @@
+name: app-ci-cd
 
+# This is the OTHER half of Day-2 toil reduction: a deploy is "merge a PR",
+# nothing more. No engineer ever runs docker build/push or kubectl apply by
+# hand against production. ArgoCD (see argocd/ and design doc section E)
+# watches the helm/the-redemption chart and reconciles automatically once
+# this pipeline updates values.yaml's image tag.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "terraform/**"
+      - "helm/**"
+      - "*.md"
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_short }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: short SHA
+        id: meta
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/github-actions-ecr-push
+          aws-region: us-east-1
+
+      - name: login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: build image
+        run: |
+          docker build -t the-redemption:${{ steps.meta.outputs.sha_short }} .
+
+      # Image is scanned BEFORE it can ever reach the manifest update step.
+      # A critical/high CVE fails the pipeline outright - this is the
+      # concrete mechanism behind "never deploy :latest, never deploy
+      # unscanned images" from the design doc's security section.
+      - name: scan image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: "the-redemption:${{ steps.meta.outputs.sha_short }}"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+
+      - name: tag and push to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker tag the-redemption:${{ steps.meta.outputs.sha_short }} \
+            $ECR_REGISTRY/the-redemption:${{ steps.meta.outputs.sha_short }}
+          docker push $ECR_REGISTRY/the-redemption:${{ steps.meta.outputs.sha_short }}
+
+  update-manifest:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bump image tag in chart values
+        env:
+          NEW_TAG: ${{ needs.build-scan-push.outputs.image_tag }}
+        run: |
+          # yq, not a raw sed, so values.yaml's structure/comments survive
+          # untouched - matters for a 3-person team reading diffs in PRs,
+          # and is the Helm-chart equivalent of the 'kustomize edit set
+          # image' approach used before the switch to Helm.
+          sudo snap install yq 2>/dev/null || pip install yq --break-system-packages -q
+          yq -i ".image.tag = \"${NEW_TAG}\"" helm/the-redemption/values.yaml
+
+      - name: helm lint
+        run: |
+          curl -sL https://get.helm.sh/helm-v3.15.4-linux-amd64.tar.gz | tar xz
+          ./linux-amd64/helm lint helm/the-redemption
+          rm -rf linux-amd64
+
+      - name: commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/the-redemption/values.yaml
+          git commit -m "deploy: the-redemption@${{ needs.build-scan-push.outputs.image_tag }}"
+          git push
+          # ArgoCD's auto-sync (argocd/application.yaml) picks this commit
+          # up within its polling interval (default 3min, or instantly via
+          # the configured webhook) and reconciles the cluster to match -
+          # no one runs 'helm upgrade' against prod by hand, same principle
+          # as before, just a different templating engine underneath.
